@@ -40,7 +40,7 @@ def main():
 
     # Set up the PlanRunner
     plan_runner = builder.AddSystem(
-        RobotPlanRunner(is_discrete=True, control_period_sec=1e-3))
+        RobotPlanRunner(is_discrete=False, control_period_sec=1e-3))
     builder.Connect(station.GetOutputPort("iiwa_position_measured"),
                     plan_runner.GetInputPort("iiwa_position_measured"))
     builder.Connect(station.GetOutputPort("iiwa_velocity_estimated"),

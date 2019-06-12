@@ -74,7 +74,7 @@ class PrimitiveDetectionSystem(LeafSystem):
 
         mbp_state_vector = self.EvalVectorInput(context, 0).get_value()
         self.mbp.SetPositionsAndVelocities(self.mbp_context, mbp_state_vector)
-
+        print(mbp_state_vector)
         # Get pose of object
         for body_name in self.body_names:
             print(body_name, ": ")
@@ -140,7 +140,26 @@ def main():
     mbp = station.get_multibody_plant()
     station.SetupDefaultStation()
     station.Finalize()
-    iiwa_q0 = np.array([0.0, 0.6, 0.0, -1.75, 0., 1., 0.])
+    iiwa_q0 = np.array([0.0, 0.6, 0.0, -1.75, 0., 1., np.pi/2.])
+
+
+    # Attach a visualizer.
+    meshcat = False # TODO(gizatt) Add to argparse
+    if (meshcat):
+        meshcat = builder.AddSystem(MeshcatVisualizer(
+            station.get_scene_graph(), zmq_url=args.meshcat))
+        builder.Connect(station.GetOutputPort("pose_bundle"),
+                        meshcat.get_input_port(0))
+    else:
+        plt.figure()
+        plt.gca().clear()
+        viz = builder.AddSystem(PlanarSceneGraphVisualizer(
+            station.get_scene_graph(),
+            xlim=[0.25, 0.8], ylim=[-0.1, 0.5],
+            ax=plt.gca()))
+        builder.Connect(station.GetOutputPort("pose_bundle"),
+                        viz.get_input_port(0))
+        plt.draw()
 
     use_plan_runner = False
     if use_plan_runner:
@@ -241,23 +260,6 @@ def main():
                         station.GetInputPort("iiwa_feedforward_torque"))
         end_time = 10000
 
-    # Attach a visualizer.
-    meshcat = False # TODO(gizatt) Add to argparse
-    if (meshcat):
-        meshcat = builder.AddSystem(MeshcatVisualizer(
-            station.get_scene_graph(), zmq_url=args.meshcat))
-        builder.Connect(station.GetOutputPort("pose_bundle"),
-                        meshcat.get_input_port(0))
-    else:
-        plt.figure()
-        plt.gca().clear()
-        viz = builder.AddSystem(PlanarSceneGraphVisualizer(
-            station.get_scene_graph(),
-            xlim=[0.25, 0.8], ylim=[-0.1, 0.5],
-            ax=plt.gca()))
-        builder.Connect(station.GetOutputPort("pose_bundle"),
-                        viz.get_input_port(0))
-
     # Hook up cameras
     primitive_detection_system = builder.AddSystem(
         PrimitiveDetectionSystem(
@@ -295,6 +297,12 @@ def main():
     #station.GetInputPort("wsg_position").FixValue(station_context, 0.0)
     differential_ik.SetPositions(diagram.GetMutableSubsystemContext(
         differential_ik, diagram_context), iiwa_q0)
+    teleop.SetPose(differential_ik.ForwardKinematics(iiwa_q0))
+    filter_.set_initial_output_value(
+        diagram.GetMutableSubsystemContext(
+            filter_, diagram_context),
+        teleop.get_output_port(0).Eval(diagram.GetMutableSubsystemContext(
+            teleop, diagram_context)))
 
     simulator = Simulator(diagram, diagram_context)
     simulator.set_publish_every_time_step(False)

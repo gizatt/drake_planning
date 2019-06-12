@@ -67,7 +67,7 @@ class PrimitiveDetectionSystem(LeafSystem):
         self.mbp_context = mbp.CreateDefaultContext()
 
         # Object body names we care about
-        self.body_names = ["base_link"]
+        self.body_names = ["blue_box", "red_box"]
 
         self.set_name('primitive_detection_system')
         self.DeclarePeriodicPublish(grab_period, 0.0)
@@ -85,11 +85,10 @@ class PrimitiveDetectionSystem(LeafSystem):
         # TODO(russt): Change this to declare a periodic event with a
         # callback instead of overriding DoPublish, pending #9992.
         LeafSystem.DoPublish(self, context, event)
-        print("Curr sim time: ", context.get_time())
 
         mbp_state_vector = self.EvalVectorInput(context, 0).get_value()
         self.mbp.SetPositionsAndVelocities(self.mbp_context, mbp_state_vector)
-        print(mbp_state_vector)
+
         # Get pose of object
         for body_name in self.body_names:
             print(body_name, ": ")
@@ -215,9 +214,9 @@ def main():
     mbp = station.get_multibody_plant()
     station.SetupDefaultStation()
     add_box_at_location(mbp, name="blue_box", color=[0.25, 0.25, 1., 1.],
-                        pose=RigidTransform(p=[0.5, 0.0, 0.0]))
+                        pose=RigidTransform(p=[0.45, 0.0, 0.05]))
     add_box_at_location(mbp, name="red_box", color=[1., 0.25, 0.25, 1.],
-                        pose=RigidTransform(p=[0.5, 0.0, 0.0]))
+                        pose=RigidTransform(p=[0.55, 0.0, 0.05]))
     station.Finalize()
     iiwa_q0 = np.array([0.0, 0.6, 0.0, -1.75, 0., 1., np.pi / 2.])
 

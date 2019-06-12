@@ -5,7 +5,6 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 
-
 from pydrake.examples.manipulation_station import (
     ManipulationStation, ManipulationStationHardwareInterface,
     CreateDefaultYcbObjectList)
@@ -41,11 +40,14 @@ from underactuated.planar_scenegraph_visualizer import PlanarSceneGraphVisualize
 from mouse_keyboard_teleop import MouseKeyboardTeleop, print_instructions
 from differential_ik import DifferentialIK
 
+from symbol_map import *
+
 
 class PrimitiveDetectionSystem(LeafSystem):
     ''' Consumes robot state and checks primitive status against it
     periodically, publishing to console. '''
-    def __init__(self, mbp, grab_period=0.1):
+
+    def __init__(self, mbp, grab_period=0.1, symbol_logger=None):
         LeafSystem.__init__(self)
 
         self.mbp = mbp
@@ -58,13 +60,15 @@ class PrimitiveDetectionSystem(LeafSystem):
 
         self.set_name('primitive_detection_system')
         self.DeclarePeriodicPublish(grab_period, 0.0)
-        
+
         # Take robot state vector as input.
         prototype_rgb_image = Image[PixelType.kRgba8U](0, 0)
         prototype_depth_image = Image[PixelType.kDepth16U](0, 0)
         self.DeclareVectorInputPort("mbp_state_vector",
                                     BasicVector(mbp.num_positions() +
                                                 mbp.num_velocities()))
+
+        self._symbol_logger = symbol_logger
 
     def DoPublish(self, context, event):
         # TODO(russt): Change this to declare a periodic event with a
@@ -81,11 +85,19 @@ class PrimitiveDetectionSystem(LeafSystem):
             print(self.mbp.EvalBodyPoseInWorld(
                 self.mbp_context, self.mbp.GetBodyByName(body_name)).matrix())
 
+        rigid_transform_dict = {}
+        for body_name in self.body_names:
+            rigid_transform_dict[body_name] = self.mbp.EvalBodyPoseInWorld(self.mbp_context,
+                                                                           self.mbp.GetBodyByName(body_name))
+        self._symbol_logger.log_symbols(rigid_transform_dict)
+        self._symbol_logger.print_curr_symbols()
+
 
 class CameraCaptureSystem(LeafSystem):
     ''' Example system that periodically
     grabs RGB-D image inputs. If given matplotlib axes,
     draws the RGB and Depth images to them when they're grabbed. '''
+
     def __init__(self, grab_period=0.1, ax_rgb=None, ax_depth=None):
         LeafSystem.__init__(self)
 
@@ -98,10 +110,10 @@ class CameraCaptureSystem(LeafSystem):
         prototype_depth_image = Image[PixelType.kDepth16U](0, 0)
         self.DeclareAbstractInputPort("rgb_image",
                                       AbstractValue.Make(
-                                        prototype_rgb_image))
+                                          prototype_rgb_image))
         self.DeclareAbstractInputPort("depth_image",
                                       AbstractValue.Make(
-                                        prototype_depth_image))
+                                          prototype_depth_image))
 
         self.rgb_data = None
         self.depth_data = None
@@ -140,11 +152,10 @@ def main():
     mbp = station.get_multibody_plant()
     station.SetupDefaultStation()
     station.Finalize()
-    iiwa_q0 = np.array([0.0, 0.6, 0.0, -1.75, 0., 1., np.pi/2.])
-
+    iiwa_q0 = np.array([0.0, 0.6, 0.0, -1.75, 0., 1., np.pi / 2.])
 
     # Attach a visualizer.
-    meshcat = False # TODO(gizatt) Add to argparse
+    meshcat = False  # TODO(gizatt) Add to argparse
     if (meshcat):
         meshcat = builder.AddSystem(MeshcatVisualizer(
             station.get_scene_graph(), zmq_url=args.meshcat))
@@ -188,7 +199,8 @@ def main():
             q_traj = PiecewisePolynomial.Cubic(
                 t_knots, q_knots, np.zeros(7), np.zeros((7)))
             return PlanData(PlanType.kJointSpacePlan,
-                              joint_traj=q_traj)
+                            joint_traj=q_traj)
+
         def MakeEEPlanData():
             t_knots = np.array([0., 2., 4.])
             ee_xyz_knots = np.array([
@@ -199,7 +211,7 @@ def main():
                 RollPitchYaw(0., np.pi, 0).ToQuaternion(),
                 RollPitchYaw(0., np.pi, 0).ToQuaternion(),
                 RollPitchYaw(0., np.pi, 0).ToQuaternion()
-                ]
+            ]
             ee_xyz_traj = PiecewisePolynomial.FirstOrderHold(
                 t_knots, ee_xyz_knots)
             ee_quat_traj = PiecewiseQuaternionSlerp(
@@ -219,7 +231,7 @@ def main():
         builder.Connect(station.GetOutputPort("iiwa_position_measured"),
                         plan_sender.GetInputPort("q"))
         end_time = plan_sender.get_all_plans_duration()
-    else: # Hook up DifferentialIK
+    else:  # Hook up DifferentialIK
         robot = station.get_controller_plant()
         params = DifferentialInverseKinematicsParameters(robot.num_positions(),
                                                          robot.num_velocities())
@@ -231,8 +243,8 @@ def main():
         iiwa14_velocity_limits = np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
         # Stay within a small fraction of those limits for this teleop demo.
         factor = 1.0
-        params.set_joint_velocity_limits((-factor*iiwa14_velocity_limits,
-                                          factor*iiwa14_velocity_limits))
+        params.set_joint_velocity_limits((-factor * iiwa14_velocity_limits,
+                                          factor * iiwa14_velocity_limits))
 
         differential_ik = builder.AddSystem(DifferentialIK(
             robot, robot.GetFrameByName("iiwa_link_7"), params, time_step))
@@ -256,24 +268,26 @@ def main():
                         station.GetInputPort("wsg_force_limit"))
 
         fft = builder.AddSystem(ConstantVectorSource(np.zeros(7)))
-        builder.Connect(fft.get_output_port(0), 
+        builder.Connect(fft.get_output_port(0),
                         station.GetInputPort("iiwa_feedforward_torque"))
         end_time = 10000
+
+    # Create symbol log
+    symbol_log = SymbolFromTransformLog([SymbolL2Close('at_start', 'base_link', np.array([0.6, 0., 0.]), .025)])
 
     # Hook up cameras
     primitive_detection_system = builder.AddSystem(
         PrimitiveDetectionSystem(
-            station.get_multibody_plant()))
+            station.get_multibody_plant(), symbol_logger=symbol_log))
     builder.Connect(
         station.GetOutputPort("plant_continuous_state"),
         primitive_detection_system.GetInputPort("mbp_state_vector"))
 
-
-    #fig = plt.figure()
-    #fig.show()
-    #camera_capture_systems = []
-    #camera_names = station.get_camera_names()
-    #for cam_i, name in enumerate(camera_names):
+    # fig = plt.figure()
+    # fig.show()
+    # camera_capture_systems = []
+    # camera_names = station.get_camera_names()
+    # for cam_i, name in enumerate(camera_names):
     #    ax_rgb = plt.subplot(len(camera_names), 2, cam_i*2 + 1)
     #    ax_depth = plt.subplot(len(camera_names), 2, cam_i*2 + 2)
     #    camera_capture_system = builder.AddSystem(CameraCaptureSystem(
@@ -293,8 +307,8 @@ def main():
     station_context = diagram.GetMutableSubsystemContext(
         station, diagram_context)
 
-    #station.GetInputPort("wsg_force_limit").FixValue(station_context, 40.0)
-    #station.GetInputPort("wsg_position").FixValue(station_context, 0.0)
+    # station.GetInputPort("wsg_force_limit").FixValue(station_context, 40.0)
+    # station.GetInputPort("wsg_position").FixValue(station_context, 0.0)
     differential_ik.SetPositions(diagram.GetMutableSubsystemContext(
         differential_ik, diagram_context), iiwa_q0)
     teleop.SetPose(differential_ik.ForwardKinematics(iiwa_q0))

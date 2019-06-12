@@ -21,7 +21,7 @@ class SymbolFromTransformLog(object):
 
     def print_curr_symbols(self):
         for i, sym in enumerate(self._symbol_list):
-            print '\tSymbol %s: %b' % (sym.name, self._symbol_assignment_list[-1][i])
+            print '\tSymbol %s: %s' % (sym.name, str(self._symbol_assignment_list[-1][i]))
 
 
 class SymbolFromTransform(object):
@@ -40,7 +40,7 @@ class SymbolFromTransform(object):
 
 class SymbolL2Close(SymbolFromTransform):
     def __init__(self, name, object1, object2, l2_thresh):
-        SymbolFromTransform.__init__(name)
+        super(SymbolL2Close, self).__init__(name)
         self._object1 = object1
         self._object2 = object2
         self._l2_thresh = l2_thresh
@@ -53,7 +53,7 @@ class SymbolL2Close(SymbolFromTransform):
 
 class SymbolL2Close(SymbolFromTransform):
     def __init__(self, name, object_name, position, delta):
-        SymbolFromTransform.__init__(name)
+        super(SymbolL2Close, self).__init__(name)
         self._object_name = object_name
         self._position = position
         self._delta = delta

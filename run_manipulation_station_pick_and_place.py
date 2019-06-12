@@ -19,12 +19,14 @@ from pydrake.manipulation.robot_plan_runner import (
     PlanType,
     RobotPlanRunner
 )
+from pydrake.manipulation.planner import (
+    DifferentialInverseKinematicsParameters)
 from pydrake.math import RigidTransform, RollPitchYaw
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.framework import (
     AbstractValue, BasicVector, DiagramBuilder, LeafSystem)
 from pydrake.systems.meshcat_visualizer import MeshcatVisualizer
-from pydrake.systems.primitives import FirstOrderLowPassFilter
+from pydrake.systems.primitives import FirstOrderLowPassFilter, ConstantVectorSource
 from pydrake.systems.sensors import (
     Image,
     PixelFormat,
@@ -34,6 +36,10 @@ from pydrake.trajectories import (
     PiecewisePolynomial,
     PiecewiseQuaternionSlerp
 )
+
+from underactuated.planar_scenegraph_visualizer import PlanarSceneGraphVisualizer
+from mouse_keyboard_teleop import MouseKeyboardTeleop, print_instructions
+from differential_ik import DifferentialIK
 
 
 class PrimitiveDetectionSystem(LeafSystem):
@@ -124,76 +130,133 @@ class CameraCaptureSystem(LeafSystem):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     MeshcatVisualizer.add_argparse_argument(parser)
+
     args = parser.parse_args()
 
     builder = DiagramBuilder()
 
     # Set up the ManipulationStation
     station = builder.AddSystem(ManipulationStation())
+    mbp = station.get_multibody_plant()
     station.SetupDefaultStation()
     station.Finalize()
+    iiwa_q0 = np.array([0.0, 0.6, 0.0, -1.75, 0., 1., 0.])
 
-    # Set up the PlanRunner
-    plan_runner = builder.AddSystem(
-        RobotPlanRunner(is_discrete=True, control_period_sec=1e-3))
-    builder.Connect(station.GetOutputPort("iiwa_position_measured"),
-                    plan_runner.GetInputPort("iiwa_position_measured"))
-    builder.Connect(station.GetOutputPort("iiwa_velocity_estimated"),
-                    plan_runner.GetInputPort("iiwa_velocity_estimated"))
-    builder.Connect(station.GetOutputPort("iiwa_torque_external"),
-                    plan_runner.GetInputPort("iiwa_torque_external"))
-    builder.Connect(plan_runner.GetOutputPort("iiwa_position_command"),
-                    station.GetInputPort("iiwa_position"))
-    builder.Connect(plan_runner.GetOutputPort("iiwa_torque_command"),
-                    station.GetInputPort("iiwa_feedforward_torque"))
+    use_plan_runner = False
+    if use_plan_runner:
+        # Set up the PlanRunner
+        plan_runner = builder.AddSystem(
+            RobotPlanRunner(is_discrete=True, control_period_sec=1e-3))
+        builder.Connect(station.GetOutputPort("iiwa_position_measured"),
+                        plan_runner.GetInputPort("iiwa_position_measured"))
+        builder.Connect(station.GetOutputPort("iiwa_velocity_estimated"),
+                        plan_runner.GetInputPort("iiwa_velocity_estimated"))
+        builder.Connect(station.GetOutputPort("iiwa_torque_external"),
+                        plan_runner.GetInputPort("iiwa_torque_external"))
+        builder.Connect(plan_runner.GetOutputPort("iiwa_position_command"),
+                        station.GetInputPort("iiwa_position"))
+        builder.Connect(plan_runner.GetOutputPort("iiwa_torque_command"),
+                        station.GetInputPort("iiwa_feedforward_torque"))
 
-    # Set up a simple PlanSender that sends multiple
-    # plans in sequence
-    def MakeQPlanData():
-        t_knots = np.array([0., 2., 4.])
-        q_knots = np.array([
-            [0., 0.6, 0., -1.75, 0., 1., 0.],
-            [0.1, 0.6, 0., -1.75, 0., 1., 0.],
-            [-0.1, 0.6, 0., -1.75, 0., 1., 0.]]).T
-        q_traj = PiecewisePolynomial.Cubic(
-            t_knots, q_knots, np.zeros(7), np.zeros((7)))
-        return PlanData(PlanType.kJointSpacePlan,
-                          joint_traj=q_traj)
-    def MakeEEPlanData():
-        t_knots = np.array([0., 2., 4.])
-        ee_xyz_knots = np.array([
-            [0.7, 0., 0.1],
-            [0.7, 0.2, 0.3],
-            [0.7, -0.2, 0.1]]).T
-        ee_quat_knots = [
-            RollPitchYaw(0., np.pi, 0).ToQuaternion(),
-            RollPitchYaw(0., np.pi, 0).ToQuaternion(),
-            RollPitchYaw(0., np.pi, 0).ToQuaternion()
-            ]
-        ee_xyz_traj = PiecewisePolynomial.FirstOrderHold(
-            t_knots, ee_xyz_knots)
-        ee_quat_traj = PiecewiseQuaternionSlerp(
-            t_knots, ee_quat_knots)
-        return PlanData(PlanType.kTaskSpacePlan,
-                        ee_data=PlanData.EeData(
-                            p_ToQ_T=np.zeros(3),
-                            ee_xyz_traj=ee_xyz_traj,
-                            ee_quat_traj=ee_quat_traj))
+        # Set up a simple PlanSender that sends multiple
+        # plans in sequence
+        def MakeQPlanData():
+            t_knots = np.array([0., 2., 4.])
+            q_knots = np.array([
+                [0., 0.6, 0., -1.75, 0., 1., 0.],
+                [0.1, 0.6, 0., -1.75, 0., 1., 0.],
+                [-0.1, 0.6, 0., -1.75, 0., 1., 0.]]).T
+            q_traj = PiecewisePolynomial.Cubic(
+                t_knots, q_knots, np.zeros(7), np.zeros((7)))
+            return PlanData(PlanType.kJointSpacePlan,
+                              joint_traj=q_traj)
+        def MakeEEPlanData():
+            t_knots = np.array([0., 2., 4.])
+            ee_xyz_knots = np.array([
+                [0.7, 0., 0.1],
+                [0.7, 0.2, 0.3],
+                [0.7, -0.2, 0.1]]).T
+            ee_quat_knots = [
+                RollPitchYaw(0., np.pi, 0).ToQuaternion(),
+                RollPitchYaw(0., np.pi, 0).ToQuaternion(),
+                RollPitchYaw(0., np.pi, 0).ToQuaternion()
+                ]
+            ee_xyz_traj = PiecewisePolynomial.FirstOrderHold(
+                t_knots, ee_xyz_knots)
+            ee_quat_traj = PiecewiseQuaternionSlerp(
+                t_knots, ee_quat_knots)
+            return PlanData(PlanType.kTaskSpacePlan,
+                            ee_data=PlanData.EeData(
+                                p_ToQ_T=np.zeros(3),
+                                ee_xyz_traj=ee_xyz_traj,
+                                ee_quat_traj=ee_quat_traj))
 
-    q_plan = MakeQPlanData()
-    ee_plan = MakeEEPlanData()
+        q_plan = MakeQPlanData()
+        ee_plan = MakeEEPlanData()
 
-    plan_sender = builder.AddSystem(PlanSender([q_plan, ee_plan]))
-    builder.Connect(plan_sender.GetOutputPort("plan_data"),
-                    plan_runner.GetInputPort("plan_data"))
-    builder.Connect(station.GetOutputPort("iiwa_position_measured"),
-                    plan_sender.GetInputPort("q"))
+        plan_sender = builder.AddSystem(PlanSender([q_plan, ee_plan]))
+        builder.Connect(plan_sender.GetOutputPort("plan_data"),
+                        plan_runner.GetInputPort("plan_data"))
+        builder.Connect(station.GetOutputPort("iiwa_position_measured"),
+                        plan_sender.GetInputPort("q"))
+        end_time = plan_sender.get_all_plans_duration()
+    else: # Hook up DifferentialIK
+        robot = station.get_controller_plant()
+        params = DifferentialInverseKinematicsParameters(robot.num_positions(),
+                                                         robot.num_velocities())
+
+        time_step = 0.005
+        params.set_timestep(time_step)
+        # True velocity limits for the IIWA14 (in rad, rounded down to the first
+        # decimal)
+        iiwa14_velocity_limits = np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
+        # Stay within a small fraction of those limits for this teleop demo.
+        factor = 1.0
+        params.set_joint_velocity_limits((-factor*iiwa14_velocity_limits,
+                                          factor*iiwa14_velocity_limits))
+
+        differential_ik = builder.AddSystem(DifferentialIK(
+            robot, robot.GetFrameByName("iiwa_link_7"), params, time_step))
+        differential_ik.parameters.set_nominal_joint_position(iiwa_q0)
+
+        builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
+                        station.GetInputPort("iiwa_position"))
+
+        print_instructions()
+        teleop = builder.AddSystem(MouseKeyboardTeleop(grab_focus=True))
+        filter_ = builder.AddSystem(
+            FirstOrderLowPassFilter(time_constant=0.005, size=6))
+
+        builder.Connect(teleop.get_output_port(0), filter_.get_input_port(0))
+        builder.Connect(filter_.get_output_port(0),
+                        differential_ik.GetInputPort("rpy_xyz_desired"))
+
+        builder.Connect(teleop.GetOutputPort("position"), station.GetInputPort(
+            "wsg_position"))
+        builder.Connect(teleop.GetOutputPort("force_limit"),
+                        station.GetInputPort("wsg_force_limit"))
+
+        fft = builder.AddSystem(ConstantVectorSource(np.zeros(7)))
+        builder.Connect(fft.get_output_port(0), 
+                        station.GetInputPort("iiwa_feedforward_torque"))
+        end_time = 10000
 
     # Attach a visualizer.
-    meshcat = builder.AddSystem(MeshcatVisualizer(
-        station.get_scene_graph(), zmq_url=args.meshcat))
-    builder.Connect(station.GetOutputPort("pose_bundle"),
-                    meshcat.get_input_port(0))
+    meshcat = False # TODO(gizatt) Add to argparse
+    if (meshcat):
+        meshcat = builder.AddSystem(MeshcatVisualizer(
+            station.get_scene_graph(), zmq_url=args.meshcat))
+        builder.Connect(station.GetOutputPort("pose_bundle"),
+                        meshcat.get_input_port(0))
+    else:
+        plt.figure()
+        plt.gca().clear()
+        viz = builder.AddSystem(PlanarSceneGraphVisualizer(
+            station.get_scene_graph(),
+            xlim=[0.25, 0.8], ylim=[-0.1, 0.5],
+            ax=plt.gca()))
+        builder.Connect(station.GetOutputPort("pose_bundle"),
+                        viz.get_input_port(0))
 
     # Hook up cameras
     primitive_detection_system = builder.AddSystem(
@@ -202,6 +265,7 @@ def main():
     builder.Connect(
         station.GetOutputPort("plant_continuous_state"),
         primitive_detection_system.GetInputPort("mbp_state_vector"))
+
 
     #fig = plt.figure()
     #fig.show()
@@ -227,13 +291,15 @@ def main():
     station_context = diagram.GetMutableSubsystemContext(
         station, diagram_context)
 
-    station.GetInputPort("wsg_force_limit").FixValue(station_context, 40.0)
-    station.GetInputPort("wsg_position").FixValue(station_context, 0.0)
+    #station.GetInputPort("wsg_force_limit").FixValue(station_context, 40.0)
+    #station.GetInputPort("wsg_position").FixValue(station_context, 0.0)
+    differential_ik.SetPositions(diagram.GetMutableSubsystemContext(
+        differential_ik, diagram_context), iiwa_q0)
 
     simulator = Simulator(diagram, diagram_context)
     simulator.set_publish_every_time_step(False)
     simulator.set_target_realtime_rate(1.0)
-    simulator.AdvanceTo(plan_sender.get_all_plans_duration())
+    simulator.AdvanceTo(end_time)
 
 
 if __name__ == "__main__":

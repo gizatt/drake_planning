@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+
 class SymbolFromTransformLog(object):
     def __init__(self, symbol_list):
         self._symbol_list = symbol_list
@@ -18,8 +19,12 @@ class SymbolFromTransformLog(object):
             data_frame_dict[sym] = sym_assign[:, i]
         return pd.DataFrame(data_frame_dict)
 
+    def print_curr_symbols(self):
+        for i, sym in enumerate(self._symbol_list):
+            print '\tSymbol %s: %b' % (sym.name, self._symbol_assignment_list[-1][i])
 
-class SymbolFromTransform( object ):
+
+class SymbolFromTransform(object):
     def __init__(self, name):
         self.name = name
 
@@ -44,6 +49,7 @@ class SymbolL2Close(SymbolFromTransform):
         t1 = rigid_transform_dict[self._object1].translation()
         t2 = rigid_transform_dict[self._object2].translation()
         return np.linalg.norm(t1 - t2) < self._l2_thresh
+
 
 class SymbolL2Close(SymbolFromTransform):
     def __init__(self, name, object_name, position, delta):

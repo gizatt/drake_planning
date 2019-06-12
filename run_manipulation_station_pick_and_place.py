@@ -338,7 +338,9 @@ def main():
         end_time = 10000
 
     # Create symbol log
-    symbol_log = SymbolFromTransformLog([SymbolL2Close('at_start', 'base_link', np.array([0.6, 0., 0.]), .025)])
+    symbol_log = SymbolFromTransformLog(
+        [SymbolL2Close('at_start', 'red_box', np.array([0.55, 0., 0.]), .025),
+         SymbolL2Close('at_start', 'blue_box', np.array([0.45, 0., 0.]), .025)])
 
     # Hook up cameras
     primitive_detection_system = builder.AddSystem(

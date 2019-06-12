@@ -8,8 +8,19 @@ import numpy as np
 from pydrake.examples.manipulation_station import (
     ManipulationStation, ManipulationStationHardwareInterface,
     CreateDefaultYcbObjectList)
-from pydrake.geometry import ConnectDrakeVisualizer
-from pydrake.multibody.plant import MultibodyPlant
+from pydrake.geometry import (
+    Box,
+)
+from pydrake.multibody.tree import (
+    PrismaticJoint,
+    SpatialInertia,
+    RevoluteJoint,
+    UniformGravityFieldElement,
+    UnitInertia,
+    FixedOffsetFrame
+)
+from pydrake.multibody.plant import (
+    MultibodyPlant, CoulombFriction)
 from pydrake.manipulation.planner import (
     DifferentialInverseKinematicsParameters)
 from pydrake.manipulation.robot_plan_runner import (
@@ -138,6 +149,58 @@ class CameraCaptureSystem(LeafSystem):
             self.depth_data.set_data(depth_image.data.squeeze())
             plt.gcf().canvas.draw()
 
+def RegisterVisualAndCollisionGeometry(
+        mbp, body, pose, shape, name, color, friction):
+    mbp.RegisterVisualGeometry(body, pose, shape, name + "_vis", color)
+    mbp.RegisterCollisionGeometry(body, pose, shape, name + "_col",
+                                  friction)
+
+def add_box_at_location(mbp, name, color, pose, mass=0.1, inertia=UnitInertia(0.001, 0.001, 0.001)):
+    no_mass_no_inertia = SpatialInertia(
+            mass=0., p_PScm_E=np.array([0., 0., 0.]),
+            G_SP_E=UnitInertia(0., 0., 0.))
+    body_mass_and_inertia = SpatialInertia(
+            mass=mass, p_PScm_E=np.array([0., 0., 0.]),
+            G_SP_E=inertia)
+    shape = Box(0.05, 0.05, 0.05)
+    model_instance = mbp.AddModelInstance(name)
+    body = mbp.AddRigidBody(name, model_instance, body_mass_and_inertia)
+    RegisterVisualAndCollisionGeometry(
+        mbp, body,
+        RigidTransform(),
+        shape, name, color,
+        CoulombFriction(0.9, 0.8))
+    body_pre_z = mbp.AddRigidBody("{}_pre_z".format(name), model_instance,
+                                  no_mass_no_inertia)
+    body_pre_theta = mbp.AddRigidBody("{}_pre_theta".format(name), model_instance,
+                                      no_mass_no_inertia)
+
+    world_carrot_origin = mbp.AddFrame(frame=FixedOffsetFrame(
+            name="world_{}_origin".format(name), P=mbp.world_frame(),
+            X_PF=pose))
+    body_joint_x = PrismaticJoint(
+        name="{}_x".format(name),
+        frame_on_parent=world_carrot_origin,
+        frame_on_child=body_pre_z.body_frame(),
+        axis=[1, 0, 0],
+        damping=0.)
+    mbp.AddJoint(body_joint_x)
+
+    body_joint_z = PrismaticJoint(
+        name="{}_z".format(name),
+        frame_on_parent=body_pre_z.body_frame(),
+        frame_on_child=body_pre_theta.body_frame(),
+        axis=[0, 0, 1],
+        damping=0.)
+    mbp.AddJoint(body_joint_z)
+
+    body_joint_theta = RevoluteJoint(
+        name="{}_theta".format(name),
+        frame_on_parent=body_pre_theta.body_frame(),
+        frame_on_child=body.body_frame(),
+        axis=[0, 1, 0],
+        damping=0.)
+    mbp.AddJoint(body_joint_theta)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -151,6 +214,10 @@ def main():
     station = builder.AddSystem(ManipulationStation())
     mbp = station.get_multibody_plant()
     station.SetupDefaultStation()
+    add_box_at_location(mbp, name="blue_box", color=[0.25, 0.25, 1., 1.],
+                        pose=RigidTransform(p=[0.5, 0.0, 0.0]))
+    add_box_at_location(mbp, name="red_box", color=[1., 0.25, 0.25, 1.],
+                        pose=RigidTransform(p=[0.5, 0.0, 0.0]))
     station.Finalize()
     iiwa_q0 = np.array([0.0, 0.6, 0.0, -1.75, 0., 1., np.pi / 2.])
 
@@ -162,7 +229,6 @@ def main():
         builder.Connect(station.GetOutputPort("pose_bundle"),
                         meshcat.get_input_port(0))
     else:
-        plt.figure()
         plt.gca().clear()
         viz = builder.AddSystem(PlanarSceneGraphVisualizer(
             station.get_scene_graph(),

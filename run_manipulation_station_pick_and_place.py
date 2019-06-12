@@ -36,6 +36,46 @@ from pydrake.trajectories import (
 )
 
 
+class PrimitiveDetectionSystem(LeafSystem):
+    ''' Consumes robot state and checks primitive status against it
+    periodically, publishing to console. '''
+    def __init__(self, mbp, grab_period=0.1):
+        LeafSystem.__init__(self)
+
+        self.mbp = mbp
+        # Our version of MBP context, which we'll modify
+        # in the publish method.
+        self.mbp_context = mbp.CreateDefaultContext()
+
+        # Object body names we care about
+        self.body_names = ["base_link"]
+
+        self.set_name('primitive_detection_system')
+        self.DeclarePeriodicPublish(grab_period, 0.0)
+        
+        # Take robot state vector as input.
+        prototype_rgb_image = Image[PixelType.kRgba8U](0, 0)
+        prototype_depth_image = Image[PixelType.kDepth16U](0, 0)
+        self.DeclareVectorInputPort("mbp_state_vector",
+                                    BasicVector(mbp.num_positions() +
+                                                mbp.num_velocities()))
+
+    def DoPublish(self, context, event):
+        # TODO(russt): Change this to declare a periodic event with a
+        # callback instead of overriding DoPublish, pending #9992.
+        LeafSystem.DoPublish(self, context, event)
+        print("Curr sim time: ", context.get_time())
+
+        mbp_state_vector = self.EvalVectorInput(context, 0).get_value()
+        self.mbp.SetPositionsAndVelocities(self.mbp_context, mbp_state_vector)
+
+        # Get pose of object
+        for body_name in self.body_names:
+            print(body_name, ": ")
+            print(self.mbp.EvalBodyPoseInWorld(
+                self.mbp_context, self.mbp.GetBodyByName(body_name)).matrix())
+
+
 class CameraCaptureSystem(LeafSystem):
     ''' Example system that periodically
     grabs RGB-D image inputs. If given matplotlib axes,
@@ -156,23 +196,30 @@ def main():
                     meshcat.get_input_port(0))
 
     # Hook up cameras
-    fig = plt.figure()
-    fig.show()
-    camera_capture_systems = []
-    camera_names = station.get_camera_names()
-    for cam_i, name in enumerate(camera_names):
-        ax_rgb = plt.subplot(len(camera_names), 2, cam_i*2 + 1)
-        ax_depth = plt.subplot(len(camera_names), 2, cam_i*2 + 2)
-        camera_capture_system = builder.AddSystem(CameraCaptureSystem(
-            grab_period=1.0,
-            ax_rgb=ax_rgb,
-            ax_depth=ax_depth))
-        camera_capture_system.set_name("capture_%d" % cam_i)
-        builder.Connect(station.GetOutputPort("camera_%s_rgb_image" % name),
-                        camera_capture_system.GetInputPort("rgb_image"))
-        builder.Connect(station.GetOutputPort("camera_%s_depth_image" % name),
-                        camera_capture_system.GetInputPort("depth_image"))
-        camera_capture_systems.append(camera_capture_system)
+    primitive_detection_system = builder.AddSystem(
+        PrimitiveDetectionSystem(
+            station.get_multibody_plant()))
+    builder.Connect(
+        station.GetOutputPort("plant_continuous_state"),
+        primitive_detection_system.GetInputPort("mbp_state_vector"))
+
+    #fig = plt.figure()
+    #fig.show()
+    #camera_capture_systems = []
+    #camera_names = station.get_camera_names()
+    #for cam_i, name in enumerate(camera_names):
+    #    ax_rgb = plt.subplot(len(camera_names), 2, cam_i*2 + 1)
+    #    ax_depth = plt.subplot(len(camera_names), 2, cam_i*2 + 2)
+    #    camera_capture_system = builder.AddSystem(CameraCaptureSystem(
+    #        grab_period=1.0,
+    #        ax_rgb=ax_rgb,
+    #        ax_depth=ax_depth))
+    #    camera_capture_system.set_name("capture_%d" % cam_i)
+    #    builder.Connect(station.GetOutputPort("camera_%s_rgb_image" % name),
+    #                    camera_capture_system.GetInputPort("rgb_image"))
+    #    builder.Connect(station.GetOutputPort("camera_%s_depth_image" % name),
+    #                    camera_capture_system.GetInputPort("depth_image"))
+    #    camera_capture_systems.append(camera_capture_system)
 
     # Remaining input ports need to be tied up.
     diagram = builder.Build()

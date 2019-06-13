@@ -38,6 +38,21 @@ class SymbolFromTransform(object):
         raise NotImplementedError
 
 
+class SymbolRelativePositionL2(SymbolFromTransform):
+    def __init__(self, name, object_on, object_base, l2_thresh, offset):
+        super(SymbolRelativePositionL2, self).__init__(name)
+        self._object_on = object_on
+        self._object_base = object_base
+        self._object_names = [self._object_on, self._object_base]
+        self._l2_thresh = l2_thresh
+        self._offset = offset
+
+    def __call__(self, rigid_transform_dict):
+        t1 = rigid_transform_dict[self._object_on].translation()
+        t2 = rigid_transform_dict[self._object_base].translation()
+        return np.linalg.norm((t1 - t2) - self._offset) < self._l2_thresh
+
+
 class SymbolL2Close(SymbolFromTransform):
     def __init__(self, name, object1, object2, l2_thresh):
         super(SymbolL2Close, self).__init__(name)
@@ -55,6 +70,7 @@ class SymbolL2Close(SymbolFromTransform):
     def __init__(self, name, object_name, position, delta):
         super(SymbolL2Close, self).__init__(name)
         self._object_name = object_name
+        self._object_names = [self._object_name]
         self._position = position
         self._delta = delta
 

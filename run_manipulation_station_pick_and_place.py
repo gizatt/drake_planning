@@ -63,7 +63,7 @@ class TaskExectionSystem(LeafSystem):
         rpy_xyz_desired_traj = None
         wsg_position_traj = None
 
-    def __init__(self, mbp, symbol_list, primitive_list, dfa_json_file, update_period=0.05):
+    def __init__(self, mbp, symbol_list, primitive_list, dfa_json_file, update_period=0.1):
         LeafSystem.__init__(self)
 
         self.mbp = mbp
@@ -165,7 +165,9 @@ class TaskExectionSystem(LeafSystem):
             for symbol in self.environment_symbols:
                 # TODO(gizatt) Generalize symbol interface to accept mbp context and
                 # do this lookup itself.
-                pose_dict = {symbol._object_name: self.mbp.EvalBodyPoseInWorld(self.mbp_context, self.mbp.GetBodyByName(symbol._object_name))}
+                pose_dict = {}
+                for name in symbol._object_names:
+                    pose_dict[name] = self.mbp.EvalBodyPoseInWorld(self.mbp_context, self.mbp.GetBodyByName(name))
                 curr_state_vector.append(symbol(pose_dict))
             curr_state_vector = np.array(curr_state_vector)
             print("Current state vector: ", curr_state_vector)
@@ -190,7 +192,7 @@ class TaskExectionSystem(LeafSystem):
                             good_transitions.append(next_node_name)
 
                 if len(good_transitions) == 0:
-                    print("WARNING: no good transitions from last state. Relocalizing to random state...")
+                    print("WARNING: no good transitions from last state. Relocalizing to random valid state...")
                     good_transitions.append(random.choice(matching_states))
 
                 # Pick random good transition and follow it.
@@ -207,6 +209,7 @@ class TaskExectionSystem(LeafSystem):
                 primitive.generate_rpyxyz_and_gripper_trajectory(self.mbp_context)
             state_object.start_time = context.get_time()
             state.get_mutable_abstract_state().get_value(0).set_value(state_object)
+
 
     def CopyRpyXyzDesiredOut(self, context, output):
         t = context.get_time()
@@ -281,7 +284,7 @@ def RegisterVisualAndCollisionGeometry(
     mbp.RegisterCollisionGeometry(body, pose, shape, name + "_col",
                                   friction)
 
-def add_box_at_location(mbp, name, color, pose, mass=0.1, inertia=UnitInertia(0.001, 0.001, 0.001)):
+def add_box_at_location(mbp, name, color, pose, mass=0.25, inertia=UnitInertia(5E-3, 5E-3, 5E-3)):
     ''' Adds a 5cm cube at the specified pose. Uses a planar floating base
     in the x-z plane. '''
     no_mass_no_inertia = SpatialInertia(
@@ -341,7 +344,7 @@ def add_goal_region_visual_geometry(mbp, goal_position, goal_delta):
     model_instance = mbp.AddModelInstance("goal_vis")
     vis_origin_frame = mbp.AddFrame(frame=FixedOffsetFrame(
             name="goal_vis_origin", P=mbp.world_frame(),
-            X_PF=RigidTransform(p=goal_position + np.array([0., 0.5, 0.]))))
+            X_PF=RigidTransform(p=(goal_position + np.array([0., 0.5, 0.])))))
     body = mbp.AddRigidBody("goal_vis", model_instance, no_mass_no_inertia)
 
     mbp.WeldFrames(vis_origin_frame, body.body_frame())
@@ -370,7 +373,7 @@ def main():
     builder = DiagramBuilder()
 
     # Set up the ManipulationStation
-    station = builder.AddSystem(ManipulationStation())
+    station = builder.AddSystem(ManipulationStation(0.001))
     mbp = station.get_multibody_plant()
     station.SetupManipulationClassStation()
     add_goal_region_visual_geometry(mbp, goal_position, goal_delta)
@@ -421,17 +424,21 @@ def main():
         symbol_list = [
             SymbolL2Close("blue_box_in_goal", "blue_box", goal_position, goal_delta),
             SymbolL2Close("red_box_in_goal", "red_box", goal_position, goal_delta),
+            SymbolRelativePositionL2("blue_box_on_red_box", "blue_box", "red_box", l2_thresh=0.01, offset=np.array([0., 0., 0.05])),
+            SymbolRelativePositionL2("red_box_on_blue_box", "red_box", "blue_box", l2_thresh=0.01, offset=np.array([0., 0., 0.05])),
         ]
         primitive_list = [
             MoveBoxPrimitive("put_blue_box_in_goal", mbp, "blue_box", goal_position),
             MoveBoxPrimitive("put_red_box_in_goal", mbp, "red_box", goal_position),
-            MoveBoxPrimitive("clean_blue_box_from_goal", mbp, "blue_box", blue_box_clean_position),
-            MoveBoxPrimitive("clean_red_box_from_goal", mbp, "red_box", red_box_clean_position),
+            MoveBoxPrimitive("put_blue_box_away", mbp, "blue_box", blue_box_clean_position),
+            MoveBoxPrimitive("put_red_box_away", mbp, "red_box", red_box_clean_position),
+            MoveBoxPrimitive("put_red_box_on_blue_box", mbp, "red_box", np.array([0., 0., 0.05]), "blue_box"),
+            MoveBoxPrimitive("put_blue_box_on_red_box", mbp, "blue_box", np.array([0., 0., 0.05]), "red_box"),
         ]
         task_execution_system = builder.AddSystem(
             TaskExectionSystem(
                 mbp, symbol_list=symbol_list, primitive_list=primitive_list,
-                dfa_json_file="red_and_blue_boxes.json"))
+                dfa_json_file="red_and_blue_boxes_stacking.json"))
 
         builder.Connect(
             station.GetOutputPort("plant_continuous_state"),

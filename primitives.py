@@ -28,20 +28,27 @@ class MoveBoxPrimitive(IiwaAndGripperPrimitive):
     ''' Interface for primitive actions that can be run
     on the ManipulationStation (Kuka IIWA + Schunk gripper).
     Makes all decisions based on an MBP context.'''
-    def __init__(self, name, mbp, body_name, goal_position):
+    def __init__(self, name, mbp, body_name, goal_position, position_relative_to_body=None):
         IiwaAndGripperPrimitive.__init__(self, name, mbp)
         self.goal_position = np.array(goal_position)
-        self.goal_body = mbp.GetBodyByName(body_name)
+        self.target_body = mbp.GetBodyByName(body_name)
+        if position_relative_to_body is not None:
+            self.offset_body = mbp.GetBodyByName(position_relative_to_body)
+        else:
+            self.offset_body = None
 
     def is_valid(self, mbp_context):
         # TODO(gizatt) This is probably not always true
         return True
 
     def generate_rpyxyz_and_gripper_trajectory(self, mbp_context):
-        start_position = self.mbp.EvalBodyPoseInWorld(mbp_context, self.goal_body).translation()
+        start_position = self.mbp.EvalBodyPoseInWorld(mbp_context, self.target_body).translation()
+        adjusted_goal_position = self.goal_position.copy()
+        if self.offset_body:
+            adjusted_goal_position += self.mbp.EvalBodyPoseInWorld(mbp_context, self.offset_body).translation()
         start_ee_pose = self.mbp.EvalBodyPoseInWorld(
             mbp_context, self.mbp.GetBodyByName("iiwa_link_7"))
-        grasp_offset = np.array([0.0, 0., 0.2]) # Amount *all* target points are shifted up
+        grasp_offset = np.array([0.0, 0., 0.225]) # Amount *all* target points are shifted up
         up_offset = np.array([0., 0., 0.1])      # Additional amount to lift objects off of table
         # Timing:
         #    0       :  t_reach: move over object
@@ -68,10 +75,10 @@ class MoveBoxPrimitive(IiwaAndGripperPrimitive):
             start_position,
             start_position,
             start_position + up_offset,
-            self.goal_position + up_offset,
-            self.goal_position,
-            self.goal_position,
-            self.goal_position + up_offset,
+            adjusted_goal_position + up_offset,
+            adjusted_goal_position,
+            adjusted_goal_position,
+            adjusted_goal_position + up_offset,
         ]).T
         ee_xyz_knots += np.tile(grasp_offset, [len(ts), 1]).T
 

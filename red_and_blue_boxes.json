@@ -1,0 +1,85 @@
+{"version": 0,
+ "slugs": "0.0.1",
+
+ "variables": ["blue_box_in_goal", "red_box_in_goal", "put_blue_box_in_goal", "clean_blue_box_from_goal", "put_red_box_in_goal", "clean_red_box_from_goal"],
+
+ "nodes": {
+"0": {
+	"rank": 0,
+	"state": [0, 0, 0, 0, 0, 0],
+	"trans": [3]
+},
+
+"1": {
+	"rank": 0,
+	"state": [0, 1, 0, 0, 0, 0],
+	"trans": [4]
+},
+
+"2": {
+	"rank": 0,
+	"state": [1, 0, 0, 0, 0, 0],
+	"trans": [5]
+},
+
+"3": {
+	"rank": 0,
+	"state": [0, 0, 1, 0, 0, 0],
+	"trans": [2]
+},
+
+"4": {
+	"rank": 0,
+	"state": [0, 1, 0, 0, 0, 1],
+	"trans": [3]
+},
+
+"5": {
+	"rank": 1,
+	"state": [1, 0, 0, 0, 0, 0],
+	"trans": [6]
+},
+
+"6": {
+	"rank": 1,
+	"state": [1, 0, 0, 1, 0, 0],
+	"trans": [7]
+},
+
+"7": {
+	"rank": 1,
+	"state": [0, 0, 0, 0, 0, 0],
+	"trans": [8]
+},
+
+"8": {
+	"rank": 1,
+	"state": [0, 0, 0, 0, 1, 0],
+	"trans": [9]
+},
+
+"9": {
+	"rank": 1,
+	"state": [0, 1, 0, 0, 0, 0],
+	"trans": [10]
+},
+
+"10": {
+	"rank": 2,
+	"state": [0, 1, 0, 0, 0, 0],
+	"trans": [11]
+},
+
+"11": {
+	"rank": 2,
+	"state": [0, 1, 0, 0, 0, 1],
+	"trans": [12]
+},
+
+"12": {
+	"rank": 2,
+	"state": [0, 0, 0, 0, 0, 0],
+	"trans": [0]
+}
+
+}}

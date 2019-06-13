@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import random
 import sys
 
 import matplotlib.pyplot as plt
@@ -35,7 +36,8 @@ from pydrake.manipulation.planner import (
 from pydrake.math import RigidTransform, RollPitchYaw
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.framework import (
-    AbstractValue, BasicVector, DiagramBuilder, LeafSystem)
+    AbstractValue, BasicVector, DiagramBuilder, LeafSystem, 
+    UnrestrictedUpdateEvent)
 from pydrake.systems.meshcat_visualizer import MeshcatVisualizer
 from pydrake.systems.primitives import (
     FirstOrderLowPassFilter,
@@ -55,6 +57,12 @@ class TaskExectionSystem(LeafSystem):
     ''' Given a compiled JSON DFA and lists of symbol and 
     primitive objects with matching names, '''
 
+    class TESState(object):
+        start_time = 0.
+        current_state_name = "0"
+        rpy_xyz_desired_traj = None
+        wsg_position_traj = None
+
     def __init__(self, mbp, symbol_list, primitive_list, dfa_json_file, update_period=0.05):
         LeafSystem.__init__(self)
 
@@ -70,16 +78,29 @@ class TaskExectionSystem(LeafSystem):
                                     BasicVector(mbp.num_positions() +
                                                 mbp.num_velocities()))
 
+        # State of system is current RPYXYZ and gripper goals
+        self.DeclareAbstractState(AbstractValue.Make(self.TESState()))
+        self.DeclarePeriodicEvent(
+            period_sec=update_period, offset_sec=0.0,
+            event=UnrestrictedUpdateEvent(self.UpdateAbstractState))
+
+
+        # Produce RPYXYZ goals + gripper goals
+        self.DeclareVectorOutputPort("rpy_xyz_desired",
+                                     BasicVector(6), self.CopyRpyXyzDesiredOut)
+        self.DeclareVectorOutputPort("wsg_position",
+                                     BasicVector(1), self.CopyWsgPositionOut)
+
         # Load the JSON file
         with open(dfa_json_file, 'r') as f:
             json_data = json.load(f)
 
         # Figure out which states in the JSON dict are environment
         # symbols, and which are primitives that we can execute.
-        environment_symbol_indices = []
-        environment_symbols = []
-        action_primitive_indices = []
-        action_primitives = []
+        self.environment_symbol_indices = []
+        self.environment_symbols = []
+        self.action_primitive_indices = []
+        self.action_primitives = []
 
         for var_i, var_name in enumerate(json_data["variables"]):
             # Split into symbols and primitives.
@@ -101,30 +122,108 @@ class TaskExectionSystem(LeafSystem):
                 raise ValueError("No matching symbol or primitive found for symbol {}.".format(var_name))
             
             if found_symbol is not None:
-                environment_symbol_indices.append(var_i)
-                environment_symbols.append(found_symbol)
+                self.environment_symbol_indices.append(var_i)
+                self.environment_symbols.append(found_symbol)
             elif found_primitive:
-                action_primitive_indices.append(var_i)
-                action_primitives.append(found_primitive)
+                self.action_primitive_indices.append(var_i)
+                self.action_primitives.append(found_primitive)
 
-        # And now build the ultimate lookup table. Each entry
-        # is a 3-tuple:
-        # ( [node name, list of symbols that should be true],
-        #   [possibly-empty list of primitives that can be taken] )
+        # And now build the ultimate lookup dictionary containing,
+        # at each node name:
+        # ( [environment symbol truth vector for this state],
+        #   [possibly-empty list of primitives that can be taken,
+        #   [next state names]] )
         self.state_lookup_table = {}
         for node_name in json_data["nodes"].keys():
             node_symbols = []
-            node_state = json_data["nodes"][node_name]["state"]
-            for i, sym in zip(environment_symbol_indices, environment_symbols):
-                if node_state[i]:
-                    node_symbols.append(sym)
+            node_state = np.array(json_data["nodes"][node_name]["state"])
+            next_node_names = [str(x) for x in json_data["nodes"][node_name]["trans"]]
             node_primitives = []
-            for i, prim in zip(action_primitive_indices, action_primitives):
+            for i, prim in zip(self.action_primitive_indices, self.action_primitives):
                 if node_state[i]:
                     node_primitives.append(prim)
-            self.state_lookup_table[node_name] = ((node_name, node_symbols, node_primitives))
+            self.state_lookup_table[node_name] = (
+                 node_state[self.environment_symbol_indices],
+                 node_primitives, next_node_names
+            )
 
-        # TODO: Add state update method and plandata output.
+    def UpdateAbstractState(self, context, event, state):
+        x = self.EvalVectorInput(context, 0).get_value()
+        t = context.get_time()
+        self.mbp.SetPositionsAndVelocities(self.mbp_context, x)
+        state_object = context.get_state().get_abstract_state().get_value(0).get_value()
+
+        trajectory_is_done = (
+            state_object.rpy_xyz_desired_traj is None or
+            state_object.wsg_position_traj is None or 
+            (t - state_object.start_time >= state_object.rpy_xyz_desired_traj.end_time() and
+            t - state_object.start_time >= state_object.wsg_position_traj.end_time())
+        )
+        if trajectory_is_done:
+            # Check each symbol against current mbp_context
+            curr_state_vector = []
+            for symbol in self.environment_symbols:
+                # TODO(gizatt) Generalize symbol interface to accept mbp context and
+                # do this lookup itself.
+                pose_dict = {symbol._object_name: self.mbp.EvalBodyPoseInWorld(self.mbp_context, self.mbp.GetBodyByName(symbol._object_name))}
+                curr_state_vector.append(symbol(pose_dict))
+            curr_state_vector = np.array(curr_state_vector)
+            print("Current state vector: ", curr_state_vector)
+
+            # Repeatedly step state forward, following desired transitions,
+            # until we find a state with an executable primitive.
+            primitive = None
+            while primitive is None:
+                # Check which states we're allowed to transition to.
+                matching_states = []
+                for node_name in self.state_lookup_table.keys():
+                    if np.all(self.state_lookup_table[node_name][0] == curr_state_vector):
+                        matching_states.append(node_name)
+                if len(matching_states) == 0:
+                    raise ValueError("No matching states to current symbol set.")
+
+                # Check which states we *want* to transition to.
+                good_transitions = []
+                if state_object.current_state_name is not None:
+                    for next_node_name in self.state_lookup_table[state_object.current_state_name][2]:
+                        if next_node_name in matching_states:
+                            good_transitions.append(next_node_name)
+
+                if len(good_transitions) == 0:
+                    print("WARNING: no good transitions from last state. Relocalizing to random state...")
+                    good_transitions.append(random.choice(matching_states))
+
+                # Pick random good transition and follow it.
+                new_state_name = random.choice(good_transitions)
+                print("Transitioning from {} to {}".format(state_object.current_state_name, new_state_name))
+                state_object.current_state_name = random.choice(good_transitions)
+                
+                primitive_options = self.state_lookup_table[state_object.current_state_name][1]
+                if len(primitive_options) > 0:
+                    primitive = random.choice(primitive_options)
+
+            print("Applying primitive {}".format(primitive.name))
+            state_object.rpy_xyz_desired_traj, state_object.wsg_position_traj = \
+                primitive.generate_rpyxyz_and_gripper_trajectory(self.mbp_context)
+            state_object.start_time = context.get_time()
+            state.get_mutable_abstract_state().get_value(0).set_value(state_object)
+
+    def CopyRpyXyzDesiredOut(self, context, output):
+        t = context.get_time()
+        # yuuuuck
+        state_object = context.get_state().get_abstract_state().get_value(0).get_value()
+        traj = state_object.rpy_xyz_desired_traj
+        if traj is None:
+            raise NotImplementedError("Traj should always be set before output is calculated.")
+        output.SetFromVector(traj.value(t - state_object.start_time))
+
+    def CopyWsgPositionOut(self, context, output):
+        t = context.get_time()
+        state_object = context.get_state().get_abstract_state().get_value(0).get_value()
+        traj = state_object.wsg_position_traj
+        if traj is None:
+            raise NotImplementedError("Traj should always be set before output is calculated.")
+        output.SetFromVector(traj.value(t - state_object.start_time))
 
 
 class SymbolLoggerSystem(LeafSystem):
@@ -256,7 +355,7 @@ def main():
     add_box_at_location(mbp, name="blue_box", color=[0.25, 0.25, 1., 1.],
                         pose=RigidTransform(p=[0.4, 0.0, 0.05]))
     add_box_at_location(mbp, name="red_box", color=[1., 0.25, 0.25, 1.],
-                        pose=RigidTransform(p=[0.55, 0.0, 0.05]))
+                        pose=RigidTransform(p=[0.6, 0.0, 0.05]))
     station.Finalize()
     iiwa_q0 = np.array([0.0, 0.6, 0.0, -1.75, 0., 1., np.pi / 2.])
 
@@ -277,51 +376,61 @@ def main():
                         viz.get_input_port(0))
         plt.draw()
 
+    # Hook up DifferentialIK, since both control modes use it.
+    robot = station.get_controller_plant()
+    params = DifferentialInverseKinematicsParameters(robot.num_positions(),
+                                                     robot.num_velocities())
+    time_step = 0.005
+    params.set_timestep(time_step)
+    # True velocity limits for the IIWA14 (in rad, rounded down to the first
+    # decimal)
+    iiwa14_velocity_limits = np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
+    # Stay within a small fraction of those limits for this teleop demo.
+    factor = 1.0
+    params.set_joint_velocity_limits((-factor * iiwa14_velocity_limits,
+                                      factor * iiwa14_velocity_limits))
+    differential_ik = builder.AddSystem(DifferentialIK(
+        robot, robot.GetFrameByName("iiwa_link_7"), params, time_step))
+    differential_ik.parameters.set_nominal_joint_position(iiwa_q0)
+    builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
+                    station.GetInputPort("iiwa_position"))
+
     if not args.teleop:
-        # Hook up DifferentialIK, since teleop will control
-        # in end effector frame.
-        robot = station.get_controller_plant()
-        params = DifferentialInverseKinematicsParameters(robot.num_positions(),
-                                                         robot.num_velocities())
-        time_step = 0.005
-        params.set_timestep(time_step)
-        # True velocity limits for the IIWA14 (in rad, rounded down to the first
-        # decimal)
-        iiwa14_velocity_limits = np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
-        # Stay within a small fraction of those limits for this teleop demo.
-        factor = 1.0
-        params.set_joint_velocity_limits((-factor * iiwa14_velocity_limits,
-                                          factor * iiwa14_velocity_limits))
-        differential_ik = builder.AddSystem(DifferentialIK(
-            robot, robot.GetFrameByName("iiwa_link_7"), params, time_step))
-        differential_ik.parameters.set_nominal_joint_position(iiwa_q0)
-        builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
-                        station.GetInputPort("iiwa_position"))
-
-
         goal_position = [0.5, 0., 0.05]
+        blue_box_clean_position = [0.4, 0., 0.05]
+        red_box_clean_position = [0.6, 0., 0.05]
         goal_delta = 0.05
         symbol_list = [
             SymbolL2Close("blue_box_in_goal", "blue_box", goal_position, goal_delta),
             SymbolL2Close("red_box_in_goal", "red_box", goal_position, goal_delta),
         ]
         primitive_list = [
-            IiwaAndGripperPrimitive("put_blue_box_in_goal", mbp),
-            IiwaAndGripperPrimitive("put_red_box_in_goal", mbp),
-            IiwaAndGripperPrimitive("clean_blue_box_from_goal", mbp),
-            IiwaAndGripperPrimitive("clean_red_box_from_goal", mbp)
+            MoveBoxPrimitive("put_blue_box_in_goal", mbp, "blue_box", goal_position),
+            MoveBoxPrimitive("put_red_box_in_goal", mbp, "red_box", goal_position),
+            MoveBoxPrimitive("clean_blue_box_from_goal", mbp, "blue_box", blue_box_clean_position),
+            MoveBoxPrimitive("clean_red_box_from_goal", mbp, "red_box", red_box_clean_position),
         ]
         task_execution_system = builder.AddSystem(
             TaskExectionSystem(
                 mbp, symbol_list=symbol_list, primitive_list=primitive_list,
                 dfa_json_file="red_and_blue_boxes.json"))
 
-        movebox = MoveBoxPrimitive("test_move_box", mbp, "red_box", goal_position)
-        rpy_xyz_trajectory, gripper_traj = movebox.generate_rpyxyz_and_gripper_trajectory(mbp.CreateDefaultContext())
-
-        rpy_xyz_trajectory_source = builder.AddSystem(TrajectorySource(rpy_xyz_trajectory))
-        builder.Connect(rpy_xyz_trajectory_source.get_output_port(0),
+        builder.Connect(
+            station.GetOutputPort("plant_continuous_state"),
+            task_execution_system.GetInputPort("mbp_state_vector"))
+        builder.Connect(task_execution_system.get_output_port(0),
                         differential_ik.GetInputPort("rpy_xyz_desired"))
+        builder.Connect(task_execution_system.get_output_port(1),
+                        station.GetInputPort("wsg_position"))
+
+        #movebox = MoveBoxPrimitive("test_move_box", mbp, "red_box", goal_position)
+        #rpy_xyz_trajectory, gripper_traj = movebox.generate_rpyxyz_and_gripper_trajectory(mbp.CreateDefaultContext())
+        #rpy_xyz_trajectory_source = builder.AddSystem(TrajectorySource(rpy_xyz_trajectory))
+        #builder.Connect(rpy_xyz_trajectory_source.get_output_port(0),
+        #                differential_ik.GetInputPort("rpy_xyz_desired"))
+        #wsg_position_source = builder.AddSystem(TrajectorySource(gripper_traj))
+        #builder.Connect(wsg_position_source.get_output_port(0),
+        #                station.GetInputPort("wsg_position"))
 
         # Target zero feedforward residual torque at all times.
         fft = builder.AddSystem(ConstantVectorSource(np.zeros(7)))
@@ -331,33 +440,10 @@ def main():
         input_force_fix = builder.AddSystem(ConstantVectorSource([40.0]))
         builder.Connect(input_force_fix.get_output_port(0),
                         station.GetInputPort("wsg_force_limit"))
-        wsg_position_source = builder.AddSystem(TrajectorySource(gripper_traj))
-        builder.Connect(wsg_position_source.get_output_port(0),
-                        station.GetInputPort("wsg_position"))
 
-        end_time = rpy_xyz_trajectory.end_time() + 100.0
+        end_time = 10000
 
     else:  # Set up teleoperation.
-        # Hook up DifferentialIK, since teleop will control
-        # in end effector frame.
-        robot = station.get_controller_plant()
-        params = DifferentialInverseKinematicsParameters(robot.num_positions(),
-                                                         robot.num_velocities())
-        time_step = 0.005
-        params.set_timestep(time_step)
-        # True velocity limits for the IIWA14 (in rad, rounded down to the first
-        # decimal)
-        iiwa14_velocity_limits = np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
-        # Stay within a small fraction of those limits for this teleop demo.
-        factor = 1.0
-        params.set_joint_velocity_limits((-factor * iiwa14_velocity_limits,
-                                          factor * iiwa14_velocity_limits))
-        differential_ik = builder.AddSystem(DifferentialIK(
-            robot, robot.GetFrameByName("iiwa_link_7"), params, time_step))
-        differential_ik.parameters.set_nominal_joint_position(iiwa_q0)
-        builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
-                        station.GetInputPort("iiwa_position"))
-
         # Hook up a pygame-based keyboard+mouse interface for
         # teleoperation, and low pass its output to drive the EE target
         # for the differential IK.
@@ -381,16 +467,16 @@ def main():
         end_time = 10000
 
     # Create symbol log
-    symbol_log = SymbolFromTransformLog(
-        [SymbolL2Close('at_goal', 'red_box', goal_position, .025),
-         SymbolL2Close('at_goal', 'blue_box', goal_position, .025)])
-
-    symbol_logger_system = builder.AddSystem(
-        SymbolLoggerSystem(
-            station.get_multibody_plant(), symbol_logger=symbol_log))
-    builder.Connect(
-        station.GetOutputPort("plant_continuous_state"),
-        symbol_logger_system.GetInputPort("mbp_state_vector"))
+    #symbol_log = SymbolFromTransformLog(
+    #    [SymbolL2Close('at_goal', 'red_box', goal_position, .025),
+    #     SymbolL2Close('at_goal', 'blue_box', goal_position, .025)])
+#
+    #symbol_logger_system = builder.AddSystem(
+    #    SymbolLoggerSystem(
+    #        station.get_multibody_plant(), symbol_logger=symbol_log))
+    #builder.Connect(
+    #    station.GetOutputPort("plant_continuous_state"),
+    #    symbol_logger_system.GetInputPort("mbp_state_vector"))
 
     # Remaining input ports need to be tied up.
     diagram = builder.Build()

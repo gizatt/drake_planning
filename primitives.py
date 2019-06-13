@@ -52,7 +52,7 @@ class MoveBoxPrimitive(IiwaAndGripperPrimitive):
         #    t_move  :  t_down : move object down
         #    t_down  :  t_drop : open gripper
         #    t_drop  :  t_done : rise back up
-        t_each = 1.0
+        t_each = 0.5
         t_reach = 0. + t_each 
         t_touch = t_reach + t_each 
         t_grasp = t_touch + t_each 
@@ -63,7 +63,7 @@ class MoveBoxPrimitive(IiwaAndGripperPrimitive):
         t_done = t_drop + t_each 
         ts = np.array([0., t_reach, t_touch, t_grasp, t_lift, t_move, t_down, t_drop, t_done])
         ee_xyz_knots = np.vstack([
-            start_ee_pose.translation(),
+            start_ee_pose.translation() - grasp_offset,
             start_position + up_offset,
             start_position,
             start_position,

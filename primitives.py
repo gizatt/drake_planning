@@ -52,7 +52,7 @@ class MoveBoxPrimitive(IiwaAndGripperPrimitive):
         #    t_move  :  t_down : move object down
         #    t_down  :  t_drop : open gripper
         #    t_drop  :  t_done : rise back up
-        t_each = 0.5
+        t_each = 0.25
         t_reach = 0. + t_each 
         t_touch = t_reach + t_each 
         t_grasp = t_touch + t_each 

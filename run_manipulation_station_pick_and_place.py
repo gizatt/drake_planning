@@ -339,12 +339,13 @@ def add_goal_region_visual_geometry(mbp, goal_position, goal_delta):
             G_SP_E=UnitInertia(0., 0., 0.))
     shape = Sphere(0.05)
     model_instance = mbp.AddModelInstance("goal_vis")
+    vis_origin_frame = mbp.AddFrame(frame=FixedOffsetFrame(
+            name="goal_vis_origin", P=mbp.world_frame(),
+            X_PF=RigidTransform(p=goal_position + np.array([0., 0.5, 0.]))))
     body = mbp.AddRigidBody("goal_vis", model_instance, no_mass_no_inertia)
-    mbp.WeldFrames(mbp.world_frame(), body.body_frame())
-    mbp.RegisterVisualGeometry(
-        body,
-        RigidTransform(p=goal_position + np.array([0., -0.5, 0.])),
-        shape, "goal_vis", [0.4, 0.9, 0.4, 0.5])
+
+    mbp.WeldFrames(vis_origin_frame, body.body_frame())
+    mbp.RegisterVisualGeometry(body, RigidTransform(), shape, "goal_vis", [0.4, 0.9, 0.4, 0.35])
 
 def main():
     goal_position = np.array([0.5, 0., 0.025])

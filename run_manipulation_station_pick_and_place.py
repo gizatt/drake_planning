@@ -11,7 +11,7 @@ from pydrake.examples.manipulation_station import (
     ManipulationStation, ManipulationStationHardwareInterface,
     CreateDefaultYcbObjectList)
 from pydrake.geometry import (
-    Box,
+    Box, Sphere
 )
 from pydrake.multibody.tree import (
     PrismaticJoint,
@@ -330,8 +330,28 @@ def add_box_at_location(mbp, name, color, pose, mass=0.1, inertia=UnitInertia(0.
         damping=0.)
     mbp.AddJoint(body_joint_theta)
 
+def add_goal_region_visual_geometry(mbp, goal_position, goal_delta):
+    ''' Adds a 5cm cube at the specified pose. Uses a planar floating base
+    in the x-z plane. '''
+    shape = Box(goal_delta, goal_delta, goal_delta)
+    no_mass_no_inertia = SpatialInertia(
+            mass=0., p_PScm_E=np.array([0., 0., 0.]),
+            G_SP_E=UnitInertia(0., 0., 0.))
+    shape = Sphere(0.05)
+    model_instance = mbp.AddModelInstance("goal_vis")
+    body = mbp.AddRigidBody("goal_vis", model_instance, no_mass_no_inertia)
+    mbp.WeldFrames(mbp.world_frame(), body.body_frame())
+    mbp.RegisterVisualGeometry(
+        body,
+        RigidTransform(p=goal_position + np.array([0., -0.5, 0.])),
+        shape, "goal_vis", [0.4, 0.9, 0.4, 0.5])
 
 def main():
+    goal_position = np.array([0.5, 0., 0.025])
+    blue_box_clean_position = [0.4, 0., 0.05]
+    red_box_clean_position = [0.6, 0., 0.05]
+    goal_delta = 0.05
+
     parser = argparse.ArgumentParser(description=__doc__)
     MeshcatVisualizer.add_argparse_argument(parser)
     parser.add_argument('--use_meshcat', action='store_true',
@@ -352,6 +372,7 @@ def main():
     station = builder.AddSystem(ManipulationStation())
     mbp = station.get_multibody_plant()
     station.SetupManipulationClassStation()
+    add_goal_region_visual_geometry(mbp, goal_position, goal_delta)
     add_box_at_location(mbp, name="blue_box", color=[0.25, 0.25, 1., 1.],
                         pose=RigidTransform(p=[0.4, 0.0, 0.05]))
     add_box_at_location(mbp, name="red_box", color=[1., 0.25, 0.25, 1.],
@@ -396,10 +417,6 @@ def main():
                     station.GetInputPort("iiwa_position"))
 
     if not args.teleop:
-        goal_position = [0.5, 0., 0.05]
-        blue_box_clean_position = [0.4, 0., 0.05]
-        red_box_clean_position = [0.6, 0., 0.05]
-        goal_delta = 0.05
         symbol_list = [
             SymbolL2Close("blue_box_in_goal", "blue_box", goal_position, goal_delta),
             SymbolL2Close("red_box_in_goal", "red_box", goal_position, goal_delta),

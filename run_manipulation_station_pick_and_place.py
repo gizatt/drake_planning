@@ -54,8 +54,57 @@ from differential_ik import DifferentialIK
 from symbol_map import *
 
 
-class PrimitiveDetectionSystem(LeafSystem):
-    ''' Consumes robot state and checks primitive status against it
+class TaskExectionSystem(LeafSystem):
+    '''  '''
+
+    def __init__(self, mbp, grab_period=0.1, symbol_logger=None):
+        LeafSystem.__init__(self)
+
+        self.mbp = mbp
+        # Our version of MBP context, which we'll modify
+        # in the publish method.
+        self.mbp_context = mbp.CreateDefaultContext()
+
+        # Object body names we care about
+        self.body_names = ["blue_box", "red_box"]
+
+        self.set_name('symbol_detection_system')
+        self.DeclarePeriodicPublish(grab_period, 0.0)
+
+        # Take robot state vector as input.
+        prototype_rgb_image = Image[PixelType.kRgba8U](0, 0)
+        prototype_depth_image = Image[PixelType.kDepth16U](0, 0)
+        self.DeclareVectorInputPort("mbp_state_vector",
+                                    BasicVector(mbp.num_positions() +
+                                                mbp.num_velocities()))
+
+        self._symbol_logger = symbol_logger
+
+    def DoPublish(self, context, event):
+        # TODO(russt): Change this to declare a periodic event with a
+        # callback instead of overriding DoPublish, pending #9992.
+        LeafSystem.DoPublish(self, context, event)
+
+        mbp_state_vector = self.EvalVectorInput(context, 0).get_value()
+        self.mbp.SetPositionsAndVelocities(self.mbp_context, mbp_state_vector)
+
+        # Get pose of object
+        for body_name in self.body_names:
+            print(body_name, ": ")
+            print(self.mbp.EvalBodyPoseInWorld(
+                self.mbp_context, self.mbp.GetBodyByName(body_name)).matrix())
+
+        rigid_transform_dict = {}
+        for body_name in self.body_names:
+            rigid_transform_dict[body_name] = self.mbp.EvalBodyPoseInWorld(self.mbp_context,
+                                                                           self.mbp.GetBodyByName(body_name))
+        self._symbol_logger.log_symbols(rigid_transform_dict)
+        self._symbol_logger.print_curr_symbols()
+
+
+
+class SymbolLoggerSystem(LeafSystem):
+    ''' Consumes robot state and checks symbol status against it
     periodically, publishing to console. '''
 
     def __init__(self, mbp, grab_period=0.1, symbol_logger=None):
@@ -69,7 +118,7 @@ class PrimitiveDetectionSystem(LeafSystem):
         # Object body names we care about
         self.body_names = ["blue_box", "red_box"]
 
-        self.set_name('primitive_detection_system')
+        self.set_name('symbol_detection_system')
         self.DeclarePeriodicPublish(grab_period, 0.0)
 
         # Take robot state vector as input.
@@ -150,11 +199,15 @@ class CameraCaptureSystem(LeafSystem):
 
 def RegisterVisualAndCollisionGeometry(
         mbp, body, pose, shape, name, color, friction):
+    ''' Register a Body subclass (usually RigidBody) to the MultibodyPlant
+    with the specified shape, color, and friction. '''
     mbp.RegisterVisualGeometry(body, pose, shape, name + "_vis", color)
     mbp.RegisterCollisionGeometry(body, pose, shape, name + "_col",
                                   friction)
 
 def add_box_at_location(mbp, name, color, pose, mass=0.1, inertia=UnitInertia(0.001, 0.001, 0.001)):
+    ''' Adds a 5cm cube at the specified pose. Uses a planar floating base
+    in the x-z plane. '''
     no_mass_no_inertia = SpatialInertia(
             mass=0., p_PScm_E=np.array([0., 0., 0.]),
             G_SP_E=UnitInertia(0., 0., 0.))
@@ -201,9 +254,19 @@ def add_box_at_location(mbp, name, color, pose, mass=0.1, inertia=UnitInertia(0.
         damping=0.)
     mbp.AddJoint(body_joint_theta)
 
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     MeshcatVisualizer.add_argparse_argument(parser)
+    parser.add_argument('--use_meshcat', action='store_true',
+                        help="Must be set for meshcat to be used.")
+    parser.add_argument('--disable_planar_viz', action='store_true',
+                        help="Don't create a planar visualizer. Probably"
+                             " breaks something that assumes the planar"
+                             " vis exists.")
+    parser.add_argument('--teleop', action='store_true',
+                        help="Enable teleop, so *don't* use the state machine"
+                             " and motion primitives.")
 
     args = parser.parse_args()
 
@@ -212,7 +275,7 @@ def main():
     # Set up the ManipulationStation
     station = builder.AddSystem(ManipulationStation())
     mbp = station.get_multibody_plant()
-    station.SetupDefaultStation()
+    station.SetupManipulationClassStation()
     add_box_at_location(mbp, name="blue_box", color=[0.25, 0.25, 1., 1.],
                         pose=RigidTransform(p=[0.45, 0.0, 0.05]))
     add_box_at_location(mbp, name="red_box", color=[1., 0.25, 0.25, 1.],
@@ -221,13 +284,13 @@ def main():
     iiwa_q0 = np.array([0.0, 0.6, 0.0, -1.75, 0., 1., np.pi / 2.])
 
     # Attach a visualizer.
-    meshcat = False  # TODO(gizatt) Add to argparse
-    if (meshcat):
+    if args.use_meshcat:
         meshcat = builder.AddSystem(MeshcatVisualizer(
             station.get_scene_graph(), zmq_url=args.meshcat))
         builder.Connect(station.GetOutputPort("pose_bundle"),
                         meshcat.get_input_port(0))
-    else:
+    
+    if not args.disable_planar_viz:
         plt.gca().clear()
         viz = builder.AddSystem(PlanarSceneGraphVisualizer(
             station.get_scene_graph(),
@@ -237,9 +300,8 @@ def main():
                         viz.get_input_port(0))
         plt.draw()
 
-    use_plan_runner = False
-    if use_plan_runner:
-        # Set up the PlanRunner
+    if not args.teleop:
+        # Set up the PlanRunner.
         plan_runner = builder.AddSystem(
             RobotPlanRunner(is_discrete=True, control_period_sec=1e-3))
         builder.Connect(station.GetOutputPort("iiwa_position_measured"),
@@ -296,11 +358,16 @@ def main():
         builder.Connect(station.GetOutputPort("iiwa_position_measured"),
                         plan_sender.GetInputPort("q"))
         end_time = plan_sender.get_all_plans_duration()
-    else:  # Hook up DifferentialIK
+
+        # station.GetInputPort("wsg_force_limit").FixValue(station_context, 40.0)
+        # station.GetInputPort("wsg_position").FixValue(station_context, 0.0)
+
+    else:  # Set up teleoperation.
+        # Hook up DifferentialIK, since teleop will control
+        # in end effector frame.
         robot = station.get_controller_plant()
         params = DifferentialInverseKinematicsParameters(robot.num_positions(),
                                                          robot.num_velocities())
-
         time_step = 0.005
         params.set_timestep(time_step)
         # True velocity limits for the IIWA14 (in rad, rounded down to the first
@@ -310,31 +377,32 @@ def main():
         factor = 1.0
         params.set_joint_velocity_limits((-factor * iiwa14_velocity_limits,
                                           factor * iiwa14_velocity_limits))
-
         differential_ik = builder.AddSystem(DifferentialIK(
             robot, robot.GetFrameByName("iiwa_link_7"), params, time_step))
         differential_ik.parameters.set_nominal_joint_position(iiwa_q0)
-
         builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
                         station.GetInputPort("iiwa_position"))
 
+        # Hook up a pygame-based keyboard+mouse interface for
+        # teleoperation, and low pass its output to drive the EE target
+        # for the differential IK.
         print_instructions()
         teleop = builder.AddSystem(MouseKeyboardTeleop(grab_focus=True))
         filter_ = builder.AddSystem(
             FirstOrderLowPassFilter(time_constant=0.005, size=6))
-
         builder.Connect(teleop.get_output_port(0), filter_.get_input_port(0))
         builder.Connect(filter_.get_output_port(0),
                         differential_ik.GetInputPort("rpy_xyz_desired"))
-
         builder.Connect(teleop.GetOutputPort("position"), station.GetInputPort(
             "wsg_position"))
         builder.Connect(teleop.GetOutputPort("force_limit"),
                         station.GetInputPort("wsg_force_limit"))
 
+        # Target zero feedforward residual torque at all times.
         fft = builder.AddSystem(ConstantVectorSource(np.zeros(7)))
         builder.Connect(fft.get_output_port(0),
                         station.GetInputPort("iiwa_feedforward_torque"))
+        # Simulate functionally forever.
         end_time = 10000
 
     # Create symbol log
@@ -342,14 +410,14 @@ def main():
         [SymbolL2Close('at_start', 'red_box', np.array([0.55, 0., 0.]), .025),
          SymbolL2Close('at_start', 'blue_box', np.array([0.45, 0., 0.]), .025)])
 
-    # Hook up cameras
-    primitive_detection_system = builder.AddSystem(
-        PrimitiveDetectionSystem(
+    symbol_logger_system = builder.AddSystem(
+        SymbolLoggerSystem(
             station.get_multibody_plant(), symbol_logger=symbol_log))
     builder.Connect(
         station.GetOutputPort("plant_continuous_state"),
-        primitive_detection_system.GetInputPort("mbp_state_vector"))
+        symbol_logger_system.GetInputPort("mbp_state_vector"))
 
+    # RGBD camera capture
     # fig = plt.figure()
     # fig.show()
     # camera_capture_systems = []
@@ -374,16 +442,15 @@ def main():
     station_context = diagram.GetMutableSubsystemContext(
         station, diagram_context)
 
-    # station.GetInputPort("wsg_force_limit").FixValue(station_context, 40.0)
-    # station.GetInputPort("wsg_position").FixValue(station_context, 0.0)
-    differential_ik.SetPositions(diagram.GetMutableSubsystemContext(
-        differential_ik, diagram_context), iiwa_q0)
-    teleop.SetPose(differential_ik.ForwardKinematics(iiwa_q0))
-    filter_.set_initial_output_value(
-        diagram.GetMutableSubsystemContext(
-            filter_, diagram_context),
-        teleop.get_output_port(0).Eval(diagram.GetMutableSubsystemContext(
-            teleop, diagram_context)))
+    if args.teleop:
+        differential_ik.SetPositions(diagram.GetMutableSubsystemContext(
+            differential_ik, diagram_context), iiwa_q0)
+        teleop.SetPose(differential_ik.ForwardKinematics(iiwa_q0))
+        filter_.set_initial_output_value(
+            diagram.GetMutableSubsystemContext(
+                filter_, diagram_context),
+            teleop.get_output_port(0).Eval(diagram.GetMutableSubsystemContext(
+                teleop, diagram_context)))
 
     simulator = Simulator(diagram, diagram_context)
     simulator.set_publish_every_time_step(False)

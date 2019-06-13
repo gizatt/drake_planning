@@ -152,51 +152,6 @@ class SymbolLoggerSystem(LeafSystem):
         self._symbol_logger.print_curr_symbols()
 
 
-class CameraCaptureSystem(LeafSystem):
-    ''' Example system that periodically
-    grabs RGB-D image inputs. If given matplotlib axes,
-    draws the RGB and Depth images to them when they're grabbed. '''
-
-    def __init__(self, grab_period=0.1, ax_rgb=None, ax_depth=None):
-        LeafSystem.__init__(self)
-
-        self.set_name('camera_capture_system')
-        self.DeclarePeriodicPublish(grab_period, 0.0)
-        # RGB and D image input ports.
-        # Declaring input ports requires supplying a prototype
-        # of the input type.
-        prototype_rgb_image = Image[PixelType.kRgba8U](0, 0)
-        prototype_depth_image = Image[PixelType.kDepth16U](0, 0)
-        self.DeclareAbstractInputPort("rgb_image",
-                                      AbstractValue.Make(
-                                          prototype_rgb_image))
-        self.DeclareAbstractInputPort("depth_image",
-                                      AbstractValue.Make(
-                                          prototype_depth_image))
-
-        self.rgb_data = None
-        self.depth_data = None
-        if ax_rgb is not None:
-            self.rgb_data = ax_rgb.imshow(np.zeros([1, 1, 4]))
-        if ax_depth is not None:
-            self.depth_data = ax_depth.imshow(np.zeros([1, 1]))
-
-    def DoPublish(self, context, event):
-        # TODO(russt): Change this to declare a periodic event with a
-        # callback instead of overriding DoPublish, pending #9992.
-        LeafSystem.DoPublish(self, context, event)
-        print("Curr sim time: ", context.get_time())
-
-        rgb_image = self.EvalAbstractInput(context, 0).get_value()
-        depth_image = self.EvalAbstractInput(context, 0).get_value()
-
-        if self.rgb_data is not None:
-            self.rgb_data.set_data(rgb_image.data)
-            plt.gcf().canvas.draw()
-        if self.depth_data is not None:
-            self.depth_data.set_data(depth_image.data.squeeze())
-            plt.gcf().canvas.draw()
-
 def RegisterVisualAndCollisionGeometry(
         mbp, body, pose, shape, name, color, friction):
     ''' Register a Body subclass (usually RigidBody) to the MultibodyPlant
@@ -416,25 +371,6 @@ def main():
     builder.Connect(
         station.GetOutputPort("plant_continuous_state"),
         symbol_logger_system.GetInputPort("mbp_state_vector"))
-
-    # RGBD camera capture
-    # fig = plt.figure()
-    # fig.show()
-    # camera_capture_systems = []
-    # camera_names = station.get_camera_names()
-    # for cam_i, name in enumerate(camera_names):
-    #    ax_rgb = plt.subplot(len(camera_names), 2, cam_i*2 + 1)
-    #    ax_depth = plt.subplot(len(camera_names), 2, cam_i*2 + 2)
-    #    camera_capture_system = builder.AddSystem(CameraCaptureSystem(
-    #        grab_period=1.0,
-    #        ax_rgb=ax_rgb,
-    #        ax_depth=ax_depth))
-    #    camera_capture_system.set_name("capture_%d" % cam_i)
-    #    builder.Connect(station.GetOutputPort("camera_%s_rgb_image" % name),
-    #                    camera_capture_system.GetInputPort("rgb_image"))
-    #    builder.Connect(station.GetOutputPort("camera_%s_depth_image" % name),
-    #                    camera_capture_system.GetInputPort("depth_image"))
-    #    camera_capture_systems.append(camera_capture_system)
 
     # Remaining input ports need to be tied up.
     diagram = builder.Build()

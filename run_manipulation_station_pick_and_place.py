@@ -284,7 +284,7 @@ def RegisterVisualAndCollisionGeometry(
     mbp.RegisterCollisionGeometry(body, pose, shape, name + "_col",
                                   friction)
 
-def add_box_at_location(mbp, name, color, pose, mass=0.25, inertia=UnitInertia(5E-3, 5E-3, 5E-3)):
+def add_box_at_location(mbp, name, color, pose, mass=0.25, inertia=UnitInertia(3E-3, 3E-3, 3E-3)):
     ''' Adds a 5cm cube at the specified pose. Uses a planar floating base
     in the x-z plane. '''
     no_mass_no_inertia = SpatialInertia(
@@ -378,9 +378,9 @@ def main():
     station.SetupManipulationClassStation()
     add_goal_region_visual_geometry(mbp, goal_position, goal_delta)
     add_box_at_location(mbp, name="blue_box", color=[0.25, 0.25, 1., 1.],
-                        pose=RigidTransform(p=[0.4, 0.0, 0.05]))
+                        pose=RigidTransform(p=[0.4, 0.0, 0.025]))
     add_box_at_location(mbp, name="red_box", color=[1., 0.25, 0.25, 1.],
-                        pose=RigidTransform(p=[0.6, 0.0, 0.05]))
+                        pose=RigidTransform(p=[0.6, 0.0, 0.025]))
     station.Finalize()
     iiwa_q0 = np.array([0.0, 0.6, 0.0, -1.75, 0., 1., np.pi / 2.])
 

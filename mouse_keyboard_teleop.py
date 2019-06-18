@@ -111,6 +111,7 @@ class TeleopMouseKeyboardManager():
 class MouseKeyboardTeleop(LeafSystem):
     def __init__(self, grab_focus=True):
         LeafSystem.__init__(self)
+        self.set_name('mouse_keyboard_teleop')
         self.DeclareVectorOutputPort("rpy_xyz", BasicVector(6),
                                      self.DoCalcOutput)
         self.DeclareVectorOutputPort("position", BasicVector(1),

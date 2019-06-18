@@ -6,6 +6,7 @@ import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pydot
 
 from pydrake.examples.manipulation_station import (
     ManipulationStation, ManipulationStationHardwareInterface,
@@ -35,6 +36,7 @@ from pydrake.manipulation.planner import (
     DifferentialInverseKinematicsParameters)
 from pydrake.math import RigidTransform, RollPitchYaw
 from pydrake.systems.analysis import Simulator
+from pydrake.systems.drawing import plot_system_graphviz
 from pydrake.systems.framework import (
     AbstractValue, BasicVector, DiagramBuilder, LeafSystem, 
     UnrestrictedUpdateEvent)
@@ -416,6 +418,7 @@ def main():
                                       factor * iiwa14_velocity_limits))
     differential_ik = builder.AddSystem(DifferentialIK(
         robot, robot.GetFrameByName("iiwa_link_7"), params, time_step))
+    differential_ik.set_name("Differential IK")
     differential_ik.parameters.set_nominal_joint_position(iiwa_q0)
     builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
                     station.GetInputPort("iiwa_position"))
@@ -505,6 +508,10 @@ def main():
 
     # Remaining input ports need to be tied up.
     diagram = builder.Build()
+
+    g = pydot.graph_from_dot_data(diagram.GetGraphvizString())[0]
+    g.write_png("system_diagram.png")
+
     diagram_context = diagram.CreateDefaultContext()
     station_context = diagram.GetMutableSubsystemContext(
         station, diagram_context)

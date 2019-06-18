@@ -1,0 +1,2 @@
+python ${SLUGS_DIR}/tools/StructuredSlugsParser/compiler.py red_and_blue_boxes_stacking.structuredslugs > red_and_blue_boxes_stacking.compiled.slugs
+${SLUGS_DIR}/src/slugs --explicitStrategy --jsonOutput red_and_blue_boxes_stacking.compiled.slugs | tee red_and_blue_boxes_stacking.json

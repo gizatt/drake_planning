@@ -1,0 +1,101 @@
+[INPUT]
+blue_box_in_goal
+red_box_in_goal
+blue_box_on_red_box
+red_box_on_blue_box
+
+
+[OUTPUT]
+put_blue_box_in_goal
+put_blue_box_on_red_box
+put_blue_box_away
+
+put_red_box_in_goal
+put_red_box_on_blue_box
+put_red_box_away
+
+
+[ENV_INIT]
+# Start in any valid config -- either or no object in the goal.
+!(blue_box_in_goal & red_box_in_goal)
+!(blue_box_on_red_box & red_box_on_blue_box)
+
+[SYS_INIT]
+# Force start with no actions, for simplicity.
+!put_blue_box_away
+!put_blue_box_in_goal
+!put_blue_box_on_red_box
+!put_red_box_away
+!put_red_box_in_goal
+!put_red_box_on_blue_box
+
+
+
+[SYS_TRANS]
+# Enforce initial state of actions.
+# (Optional. For these primitives, they make sense from
+# anywhere as long as the goal / non-goal region is
+# unoccupied.)
+#!(!blue_box_in_goal') -> !put_blue_box_in_goal'
+#!blue_box_in_goal' -> !(put_blue_box_away')
+#!(!red_box_in_goal') -> !put_red_box_in_goal'
+#!red_box_in_goal' -> !(put_red_box_away')
+
+# An object resting on another object keeps the
+# supporting object from being manipulated.
+!(!blue_box_on_red_box') -> !put_red_box_in_goal'
+!(!blue_box_on_red_box') -> !put_blue_box_in_goal'
+!(!blue_box_on_red_box') -> !put_red_box_away'
+!(!blue_box_on_red_box') -> !put_red_box_on_blue_box'
+!(!red_box_on_blue_box') -> !put_blue_box_in_goal'
+!(!red_box_on_blue_box') -> !put_red_box_in_goal'
+!(!red_box_on_blue_box') -> !put_blue_box_away'
+!(!red_box_on_blue_box') -> !put_blue_box_on_red_box'
+
+# Boxes can't co-occupy goal unless one is on top of
+# the other.
+(!(red_box_in_goal' & blue_box_in_goal') | red_box_on_blue_box' | blue_box_on_red_box')
+# Boxes can't both be on top of each other
+!(red_box_on_blue_box' & blue_box_on_red_box')
+
+
+# Take one action at a time.
+put_blue_box_away' -> (!put_blue_box_in_goal' & !put_red_box_in_goal' & !put_red_box_away' & !put_red_box_on_blue_box' & !put_blue_box_on_red_box')
+put_blue_box_in_goal' -> (!put_red_box_away' & !put_red_box_in_goal' & !put_red_box_away' & !put_red_box_on_blue_box' & !put_blue_box_on_red_box')
+put_blue_box_on_red_box' -> (!put_blue_box_away' & !put_blue_box_in_goal' & !put_red_box_in_goal' & !put_red_box_away' & !put_red_box_on_blue_box')
+put_red_box_away' -> (!put_blue_box_in_goal' & !put_blue_box_in_goal & !put_red_box_in_goal' & !put_red_box_on_blue_box' & !put_blue_box_on_red_box')
+put_red_box_in_goal' -> (!put_blue_box_in_goal' & !put_blue_box_away & !put_red_box_away' & !put_red_box_on_blue_box' & !put_blue_box_on_red_box')
+put_red_box_on_blue_box' -> (!put_blue_box_away' & !put_blue_box_in_goal' & !put_red_box_in_goal' & !put_red_box_away' & !put_blue_box_on_red_box')
+
+
+[ENV_TRANS]
+# Consequences of actions.
+# Putting boxes away takes them off of whatever they're on,
+# and removes them from the goal.
+put_blue_box_away -> (!blue_box_in_goal' & !blue_box_on_red_box')
+put_red_box_away -> (!red_box_in_goal' & !red_box_on_blue_box')
+
+# Putting objects in the goal does not put them on
+# the other box.
+put_blue_box_in_goal -> blue_box_in_goal' & !blue_box_on_red_box' & !red_box_on_blue_box'
+put_red_box_in_goal -> red_box_in_goal' & !red_box_on_blue_box' & !blue_box_on_red_box'
+
+# Putting objects on the other box makes their in_goal state
+# align.
+(put_blue_box_on_red_box & red_box_in_goal) -> (blue_box_on_red_box' & blue_box_in_goal')
+(put_blue_box_on_red_box & !red_box_in_goal) -> (blue_box_on_red_box' & !blue_box_in_goal')
+(put_red_box_on_blue_box & blue_box_in_goal) -> (red_box_on_blue_box' & red_box_in_goal')
+(put_red_box_on_blue_box & !blue_box_in_goal) -> (red_box_on_blue_box' & !red_box_in_goal')
+
+# Not taking an action implies box state *doesn't* change.
+(!put_blue_box_in_goal & !put_blue_box_away & !put_blue_box_on_red_box) -> (blue_box_in_goal <-> blue_box_in_goal')
+(!put_blue_box_in_goal & !put_blue_box_away & !put_blue_box_on_red_box) -> (blue_box_on_red_box <-> blue_box_on_red_box')
+(!put_red_box_in_goal & !put_red_box_away & !put_red_box_on_blue_box) -> (red_box_in_goal <-> red_box_in_goal')
+(!put_red_box_in_goal & !put_red_box_away & !put_red_box_on_blue_box) -> (red_box_on_blue_box <-> red_box_on_blue_box')
+
+
+[SYS_LIVENESS]
+blue_box_in_goal & blue_box_on_red_box
+red_box_in_goal & red_box_on_blue_box
+blue_box_on_red_box & !blue_box_in_goal
+red_box_on_blue_box & !red_box_in_goal

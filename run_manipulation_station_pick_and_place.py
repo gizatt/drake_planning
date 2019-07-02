@@ -441,7 +441,7 @@ def main():
         task_execution_system = builder.AddSystem(
             TaskExectionSystem(
                 mbp, symbol_list=symbol_list, primitive_list=primitive_list,
-                dfa_json_file="red_and_blue_boxes_stacking.json"))
+                dfa_json_file="specifications/red_and_blue_boxes_stacking.json"))
 
         builder.Connect(
             station.GetOutputPort("plant_continuous_state"),

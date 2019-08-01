@@ -55,6 +55,8 @@ from symbol_map import *
 from primitives import *
 
 
+from underactuated.pyplot_visualizer import PyPlotVisualizer
+
 class TaskExectionSystem(LeafSystem):
     ''' Given a compiled JSON DFA and lists of symbol and 
     primitive objects with matching names, '''
@@ -469,7 +471,7 @@ def main():
         builder.Connect(input_force_fix.get_output_port(0),
                         station.GetInputPort("wsg_force_limit"))
 
-        end_time = 10000
+        end_time = 5 # was 10000
 
     else:  # Set up teleoperation.
         # Hook up a pygame-based keyboard+mouse interface for
@@ -492,13 +494,13 @@ def main():
         builder.Connect(fft.get_output_port(0),
                         station.GetInputPort("iiwa_feedforward_torque"))
         # Simulate functionally forever.
-        end_time = 10000
+        end_time = 5 # was 10000
 
     # Create symbol log
     #symbol_log = SymbolFromTransformLog(
     #    [SymbolL2Close('at_goal', 'red_box', goal_position, .025),
     #     SymbolL2Close('at_goal', 'blue_box', goal_position, .025)])
-#
+    #
     #symbol_logger_system = builder.AddSystem(
     #    SymbolLoggerSystem(
     #        station.get_multibody_plant(), symbol_logger=symbol_log))
@@ -531,7 +533,13 @@ def main():
     simulator = Simulator(diagram, diagram_context)
     simulator.set_publish_every_time_step(False)
     simulator.set_target_realtime_rate(1.0)
+
+    video_recorder = PyPlotVisualizer(ax=plt.gca())
+    video_recorder.start_recording()
     simulator.AdvanceTo(end_time)
+    recording = video_recorder.get_recording()
+    print 'Recording length'
+    print len(list(recording.frame_seq))
 
 
 if __name__ == "__main__":

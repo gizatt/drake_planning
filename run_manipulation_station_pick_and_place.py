@@ -7,6 +7,7 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import pydot
+import datetime
 
 from pydrake.examples.manipulation_station import (
     ManipulationStation, ManipulationStationHardwareInterface,
@@ -381,10 +382,15 @@ def main():
     mbp = station.get_multibody_plant()
     station.SetupManipulationClassStation()
     add_goal_region_visual_geometry(mbp, goal_position, goal_delta)
+    # add_box_at_location(mbp, name="blue_box", color=[0.25, 0.25, 1., 1.],
+    #                     pose=RigidTransform(p=[0.4, 0.0, 0.025]))
+    # add_box_at_location(mbp, name="red_box", color=[1., 0.25, 0.25, 1.],
+    #                     pose=RigidTransform(p=[0.6, 0.0, 0.025]))
     add_box_at_location(mbp, name="blue_box", color=[0.25, 0.25, 1., 1.],
-                        pose=RigidTransform(p=[0.4, 0.0, 0.025]))
+                        pose=RigidTransform(p=[0.4 + 0.05 * (np.random.uniform() * 2 - 1), 0.0, 0.025]))
     add_box_at_location(mbp, name="red_box", color=[1., 0.25, 0.25, 1.],
-                        pose=RigidTransform(p=[0.6, 0.0, 0.025]))
+                        pose=RigidTransform(p=[0.6 + 0.05 * (np.random.uniform() * 2 - 1), 0.0, 0.025]))
+
     station.Finalize()
     iiwa_q0 = np.array([0.0, 0.6, 0.0, -1.75, 0., 1., np.pi / 2.])
 
@@ -397,10 +403,11 @@ def main():
     
     if not args.disable_planar_viz:
         plt.gca().clear()
-        viz = builder.AddSystem(PlanarSceneGraphVisualizer(
+        planar_visualizer = PlanarSceneGraphVisualizer(
             station.get_scene_graph(),
             xlim=[0.25, 0.8], ylim=[-0.1, 0.5],
-            ax=plt.gca()))
+            ax=plt.gca())
+        viz = builder.AddSystem(planar_visualizer)
         builder.Connect(station.GetOutputPort("pose_bundle"),
                         viz.get_input_port(0))
         plt.draw()
@@ -471,7 +478,7 @@ def main():
         builder.Connect(input_force_fix.get_output_port(0),
                         station.GetInputPort("wsg_force_limit"))
 
-        end_time = 5 # was 10000
+        end_time = 20
 
     else:  # Set up teleoperation.
         # Hook up a pygame-based keyboard+mouse interface for
@@ -494,7 +501,7 @@ def main():
         builder.Connect(fft.get_output_port(0),
                         station.GetInputPort("iiwa_feedforward_torque"))
         # Simulate functionally forever.
-        end_time = 5 # was 10000
+        end_time = 10000
 
     # Create symbol log
     #symbol_log = SymbolFromTransformLog(
@@ -534,12 +541,11 @@ def main():
     simulator.set_publish_every_time_step(False)
     simulator.set_target_realtime_rate(1.0)
 
-    video_recorder = PyPlotVisualizer(ax=plt.gca())
-    video_recorder.start_recording()
+    # video_recorder = PyPlotVisualizer(ax=plt.gca())
+    planar_visualizer.start_recording()
     simulator.AdvanceTo(end_time)
-    recording = video_recorder.get_recording()
-    print 'Recording length'
-    print len(list(recording.frame_seq))
+    recording = planar_visualizer.get_recording()
+    recording.save('video_%s.mp4' % str(datetime.datetime.now()).replace(' ', '_') )
 
 
 if __name__ == "__main__":
